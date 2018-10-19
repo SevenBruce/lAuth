@@ -1,0 +1,170 @@
+free scUser: channel [private].
+free scSensor: channel [private].
+free cug: channel.
+free csg: channel.
+
+free skiju: bitstring [private]. (*the user’s session key*)
+free skijs: bitstring [private]. (*the sensor’s session key*)
+free   idi: bitstring [private]. (*the sensor’s identity*)
+free  sidj: bitstring [private]. (*the sensor’s identity*)
+
+
+(* Diffie-Hellman key agreement *)
+type G.
+type exponent .
+
+const g:G[data].
+fun exp(G,exponent):G.
+equation forall x: exponent, y: exponent; exp(exp(g,x), y) = exp (exp(g,y), x).
+
+fun hash(bitstring): bitstring.                 (* hash function *)
+fun con(bitstring,bitstring):bitstring.         (*string concatenation*)
+reduc forall x: bitstring, y: bitstring; Split(con(x, y)) = (x, y).
+fun g2h(G):bitstring.                           (* extra hash function typeConverter *)
+
+(* XOR operation *)
+fun xor(bitstring, bitstring) : bitstring.
+equation forall m:bitstring, n:bitstring; xor(xor(m,n),n)=m.
+
+
+(* Queries *)
+query attacker(skiju).
+query attacker(skijs).
+query attacker(idi).
+query attacker(sidj).
+
+event acceptSensorbyGateway(bitstring).
+event acceptUserbyGateway(bitstring).
+event termGatewaywithUser(bitstring).
+event termGatewaywithSensor(bitstring).
+
+event acceptSensor(bitstring).
+event termSensor(bitstring).
+
+event acceptUser(bitstring).
+event termUser(bitstring).
+
+query x: bitstring;
+	inj-event(termGatewaywithUser(x)) ==> inj-event(acceptSensor(x)).
+query x: bitstring;
+	inj-event(termUser(x)) ==> inj-event(acceptUserbyGateway(x)).
+
+query x: bitstring;
+	inj-event(termSensor(x)) ==> inj-event(acceptUserbyGateway(x)).
+query x: bitstring;
+	inj-event(termGatewaywithSensor(x)) ==> inj-event(acceptSensor(x)).
+
+(* Role of the user*)
+let processUser(idi: bitstring, sidj: bitstring, pwi: bitstring) =
+  (* registration phase of the user *)
+	new ri:bitstring;
+  let mpi = hash(con(ri,con(idi,pwi))) in
+  out(scUser,(idi,mpi));
+  in(scUser,(fi:bitstring,li:bitstring,ki:bitstring));
+  let (ei:bitstring) = xor(li, mpi) in
+    let (di:bitstring) = xor(fi, mpi) in
+    	(* Real start of the role *)
+      (* Message 1*)
+      new k1:exponent;
+      let A = exp(g,k1) in
+      new T1:bitstring;
+      let m2 = hash(con(g2h(A),con(idi,(con(sidj,con(di,T1)))))) in
+      let m1 = xor(ei,con(idi,con(sidj,m2))) in
+      out(cug, (A, ki, m1, T1));
+      (* Message 4 *)
+    	in(cug, (B:G, M6:bitstring));
+      let (tem:bitstring) = xor(M6, ei) in
+      let (einew':bitstring, tem1: bitstring) = Split(tem) in
+      let (k3':bitstring, m7':bitstring) = Split(tem1) in
+      let skiju = hash(g2h(exp (B, k1))) in
+      let m4' = hash(con(g2h(B),con(skiju,g2h(A)))) in
+      if (m7') = hash(con(einew',con(k3',con(di,con(T1,m4'))))) then
+			event acceptUser(di);
+	    let li = xor(mpi,einew') in
+	    let ki = k3' in
+			event termUser(di).
+
+(* Role of the Sensor*)
+let processSensor(sidj: bitstring) =
+	(* registration phase of the sensor *)
+	out(scSensor,sidj);
+  in (scSensor,xj: bitstring);
+	(* Real start of the role *)
+  (* Message 2*)
+  in(csg,(A:G,m3:bitstring,T2:bitstring));
+  (* Message 3*)
+  if (m3) = hash(con(g2h(A),con(sidj,con(xj,T2)))) then
+	event acceptSensor(xj);
+  new k2:exponent;
+  let B = exp (g, k2) in
+  let skijs = hash(g2h(exp (A, k2))) in
+  let m4 = hash(con(g2h(B),con(skijs,g2h(A)))) in
+  let m5 = hash(con(g2h(A),con(xj,con(m3,con(m4,con(g2h(B),T2)))))) in
+  out(csg,(B,m4,m5));
+	event termSensor(xj).
+
+(* Server *)
+let processGateway(xgwn: bitstring) =
+  (* Message 2*)
+  in(cug,(A:G, ki:bitstring, M1:bitstring, T1:bitstring));
+  let ei' = hash(con(ki,xgwn)) in
+  let (tem:bitstring) = xor(M1, ei') in
+  let (idi':bitstring, tem1: bitstring) = Split(tem) in
+  let di'= hash(con(idi',xgwn)) in
+  let (sidj': bitstring, m2': bitstring) = Split(tem1) in
+  if (m2') = hash(con(g2h(A),con(sidj',hash(con(idi',xgwn))))) then
+	event acceptUserbyGateway(di');
+  new T2: bitstring;
+  let xj'=hash(con(sidj',xgwn)) in
+  let m3 = hash(con(g2h(A),con(sidj',con(xj',T2)))) in
+  out(csg,(A,m3,T2));
+  (* Message 4*)
+  in(csg,(B:G, m4:bitstring, m5:bitstring));
+  if (m5) = hash(con(g2h(A),con(xj',con(m3,con(m4,con(g2h(B),T2)))))) then
+  new k3:bitstring;
+  let einew = hash(con(k3,xgwn)) in
+  let m7 = hash(con(einew,con(k3,con(di',con(T1,m4))))) in
+	event acceptSensorbyGateway(xj');
+	event termGatewaywithSensor(xj');
+  let m6 = xor(con(einew,con(k3,m7)),ei') in
+  out(cug,(B,m6));
+	event termGatewaywithUser(di').
+
+
+(* User registration *)
+let processUserRegistration(xgwn: bitstring) =
+	in(scUser, (idi: bitstring, mpi:bitstring));
+  let di = hash(con(idi,xgwn)) in
+  let fi = xor(di,mpi) in
+  new ki:bitstring;
+   let ei= hash(con(idi,xgwn)) in
+   let li= xor(ei,mpi) in
+  out(scUser,(fi,li,ki)).
+
+(* Sensor registration *)
+let processSensorRegistration(xgwn: bitstring) =
+  in(scSensor, sidj:bitstring);
+  let xj = hash(con(sidj,xgwn)) in
+  out(scSensor,xj).
+
+(* Start process *)
+process
+(* initiation of the Gateway *)
+	new xgwn: bitstring;
+(* initiation of the user *)
+	new idi: bitstring; new pwi: bitstring;
+(* initiation of the sensor *)
+	new sidj: bitstring;
+	(
+	  (* Launch an unbounded number of sessions of the User *)
+	  (!processUser(idi,sidj,pwi)) |
+	  (* Launch an unbounded number of sessions of the Sensor *)
+	  (!processSensor(sidj)) |
+	  (* Launch an unbounded number of sessions of the Gateway *)
+	  (!processGateway(xgwn)) |
+
+	  (* User registration process *)
+	  (!processUserRegistration(xgwn)) |
+    (* Sensor registration process *)
+	  (!processSensorRegistration(xgwn))
+	)
